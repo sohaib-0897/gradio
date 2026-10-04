@@ -396,6 +396,161 @@ describe("Props: placeholder / examples", () => {
 describe("Props: allow_tags", () => {
 	afterEach(() => cleanup());
 
+	test("allow_tags=true preserves the issue #13939 messages", async () => {
+		const messages = [
+			"<tool_call>This text does not show.</tool_call>",
+			"<tool_result>Neither does this.</tool_result>",
+			"<example>This shows up just fine.</example>"
+		];
+		const { container } = await render(Chatbot, {
+			...default_props,
+			allow_tags: true,
+			value: messages.map((message, index) =>
+				text_msg("assistant", message, index)
+			)
+		});
+
+		await waitFor(() => {
+			const rendered = container.querySelectorAll(".message-content .md");
+			expect(Array.from(rendered, (node) => node.textContent?.trim())).toEqual(
+				messages
+			);
+		});
+		expect(
+			container.querySelector("tool_call, tool_result, example")
+		).toBeNull();
+	});
+
+	test.each([true, false])(
+		"allow_tags=true preserves custom tag names with render_markdown=%s",
+		async (render_markdown) => {
+			const tags = [
+				"tool_call",
+				"tool_result",
+				"tool_response",
+				"example",
+				"tool-call",
+				"Tool_Call",
+				"tool2_result"
+			];
+			const messages = tags.map((tag) => `<${tag}>content</${tag}>`);
+			const { container } = await render(Chatbot, {
+				...default_props,
+				allow_tags: true,
+				render_markdown,
+				value: messages.map((message, index) =>
+					text_msg("assistant", message, index)
+				)
+			});
+
+			await waitFor(() => {
+				const rendered = container.querySelectorAll(".message-content .md");
+				expect(
+					Array.from(rendered, (node) => node.textContent?.trim())
+				).toEqual(messages);
+			});
+			expect(container.querySelector(tags.join(", "))).toBeNull();
+		}
+	);
+
+	test("allow_tags=false still removes unknown elements and their content", async () => {
+		const { container } = await render(Chatbot, {
+			...default_props,
+			allow_tags: false,
+			value: [
+				text_msg(
+					"assistant",
+					"<tool_call>hidden call</tool_call><tool_result>hidden result</tool_result><example>hidden example</example><tool-call>hidden hyphen</tool-call><b>visible</b>",
+					0
+				)
+			]
+		});
+
+		await waitFor(() =>
+			expect(
+				container.querySelector(".message-content .md")?.textContent?.trim()
+			).toBe("visible")
+		);
+		expect(
+			container.querySelector("tool_call, tool_result, example, tool-call")
+		).toBeNull();
+	});
+
+	test("explicit allow_tags preserves tags with underscores", async () => {
+		const messages = [
+			"<tool_call>call</tool_call>",
+			"<tool_result>result</tool_result>"
+		];
+		const { container } = await render(Chatbot, {
+			...default_props,
+			allow_tags: ["tool_call", "tool_result"],
+			value: messages.map((message, index) =>
+				text_msg("assistant", message, index)
+			)
+		});
+
+		await waitFor(() => {
+			const rendered = container.querySelectorAll(".message-content .md");
+			expect(Array.from(rendered, (node) => node.textContent?.trim())).toEqual(
+				messages
+			);
+		});
+		expect(container.querySelector("tool_call, tool_result")).toBeNull();
+	});
+
+	test("allow_tags=true keeps HTML sanitization active", async () => {
+		const custom_tag = '<tool_call onclick="alert(1)">safe</tool_call>';
+		const { container } = await render(Chatbot, {
+			...default_props,
+			allow_tags: true,
+			value: [
+				text_msg(
+					"assistant",
+					`${custom_tag}\n\n<script>unsafe script</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">link</a>`,
+					0
+				)
+			]
+		});
+
+		await waitFor(() =>
+			expect(
+				container.querySelector(".message-content .md")?.textContent
+			).toContain(custom_tag)
+		);
+		const content = container.querySelector(".message-content .md")!;
+		expect(
+			content.querySelector("tool_call, script, [onclick], [onerror]")
+		).toBeNull();
+		expect(content.textContent).not.toContain("unsafe script");
+		expect(content.querySelector("img")).not.toBeNull();
+		expect(content.querySelector("a")?.textContent).toBe("link");
+		expect(content.querySelector("a")?.getAttribute("href")).toBeNull();
+	});
+
+	test("allow_tags=true preserves normal Markdown, HTML and SVG rendering", async () => {
+		const { container } = await render(Chatbot, {
+			...default_props,
+			allow_tags: true,
+			value: [
+				text_msg(
+					"assistant",
+					'**bold** and `code`\n\n<em>HTML</em><svg><circle r="1"></circle></svg>',
+					0
+				)
+			]
+		});
+
+		await waitFor(() =>
+			expect(
+				container.querySelector(".message-content .md strong")?.textContent
+			).toBe("bold")
+		);
+		const content = container.querySelector(".message-content .md")!;
+		expect(content.querySelector("code")?.textContent).toBe("code");
+		expect(content.querySelector("em")?.textContent).toBe("HTML");
+		expect(content.querySelector("svg circle")).not.toBeNull();
+	});
+
 	test("custom HTML tags preserved when in allow_tags", async () => {
 		const { getAllByTestId } = await render(Chatbot, {
 			...default_props,
@@ -404,7 +559,10 @@ describe("Props: allow_tags", () => {
 		});
 
 		const bot = getAllByTestId("bot")[0];
-		expect(bot.textContent).toContain("deep thought");
+		await waitFor(() =>
+			expect(bot.textContent).toContain("<thinking>deep thought</thinking>")
+		);
+		expect(bot.querySelector("thinking")).toBeNull();
 	});
 });
 
